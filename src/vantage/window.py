@@ -350,10 +350,13 @@ class VantageWindow(Adw.ApplicationWindow):
     # ---- tray / background ---------------------------------------------------
 
     def _show_settings(self, *_args):
-        dialog = Adw.PreferencesDialog()
-        dialog.set_title(_("Preferences"))
-        page = Adw.PreferencesPage()
-        grp = Adw.PreferencesGroup(title=_("General"))
+        # A plain Adw.Dialog that sizes to its content — Adw.PreferencesDialog
+        # wraps its page in a scrolled view at a large default height, which
+        # leaves empty space and a scrollbar for just two rows.
+        dialog = Adw.Dialog(title=_("Preferences"), content_width=420)
+        dialog.set_follows_content_size(True)
+
+        grp = Adw.PreferencesGroup()
 
         bg_row = Adw.SwitchRow(
             title=_("Run in Background"),
@@ -378,8 +381,15 @@ class VantageWindow(Adw.ApplicationWindow):
         auto_row.connect("notify::active", self._on_autostart_toggled)
         grp.add(auto_row)
 
-        page.add(grp)
-        dialog.add(page)
+        grp.set_margin_top(12)
+        grp.set_margin_bottom(12)
+        grp.set_margin_start(12)
+        grp.set_margin_end(12)
+
+        tv = Adw.ToolbarView()
+        tv.add_top_bar(Adw.HeaderBar())
+        tv.set_content(grp)
+        dialog.set_child(tv)
         dialog.present(self)
 
     def _on_bg_toggled(self, row, _pspec):
