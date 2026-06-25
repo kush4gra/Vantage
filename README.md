@@ -34,42 +34,52 @@ Controls auto-hide when the underlying hardware isn't present, so the same app w
 
 ## Installation
 
+Vantage uses the [Meson](https://mesonbuild.com/) build system, the standard
+for GTK/GNOME applications.
+
 ```bash
 git clone https://github.com/isshin1/vantage.git
 cd vantage
-sudo make install
+./install.sh                 # install runtime + build dependencies
+meson setup build
+sudo meson install -C build
 ```
 
-Then launch **Lenovo Vantage** from your applications menu, or run `vantage` / `vantage-tray` from the terminal.
+Then launch **Lenovo Vantage** from your applications menu, or run `vantage` from the terminal. To start minimised to the tray, use `vantage --tray`.
 
 ### Manual dependency install
 
-`sudo make install` handles dependencies automatically. If you prefer to install them yourself:
+`./install.sh` handles dependencies automatically. If you prefer to install them yourself, you need the runtime libraries plus the build tools (`meson`, `ninja`, `gettext`, and the GLib schema/AppStream utilities):
 
 **Arch Linux**
 ```bash
-sudo pacman -S python-gobject libayatana-appindicator gtk4 libadwaita polkit networkmanager
+sudo pacman -S python-gobject gtk4 libadwaita polkit networkmanager \
+               meson ninja gettext glib2 appstream
 ```
 
 **Debian / Ubuntu / Mint / Pop!_OS**
 ```bash
-sudo apt install python3-gi gir1.2-ayatanaappindicator3-0.1 gir1.2-gtk-4.0 gir1.2-adw-1 libadwaita-1-0 policykit-1
+sudo apt install python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 libadwaita-1-0 policykit-1 \
+                 meson ninja-build gettext libglib2.0-bin appstream
 ```
 
 **Fedora**
 ```bash
-sudo dnf install python3-gobject libayatana-appindicator-gtk3 gtk4 libadwaita polkit NetworkManager pipewire-pulseaudio
+sudo dnf install python3-gobject gtk4 libadwaita polkit NetworkManager pipewire-pulseaudio \
+                 meson ninja-build gettext glib2-devel appstream
 ```
 
 **openSUSE Tumbleweed**
 ```bash
-sudo zypper install python3-gobject libayatana-appindicator3-1 typelib-1_0-AyatanaAppIndicator3-0_1 gtk4 libadwaita typelib-1_0-Gtk-4_0 typelib-1_0-Adw-1 polkit NetworkManager pipewire-pulseaudio
+sudo zypper install python3-gobject gtk4 libadwaita typelib-1_0-Gtk-4_0 typelib-1_0-Adw-1 \
+                    polkit NetworkManager pipewire-pulseaudio meson ninja gettext-tools \
+                    glib2-tools appstream
 ```
 
 ## Uninstall
 
 ```bash
-sudo make uninstall
+sudo ninja -C build uninstall
 ```
 
 ## Architecture
@@ -77,16 +87,53 @@ sudo make uninstall
 Vantage is split into three components:
 
 - **`vantage`** — GTK4 + libadwaita settings window with grouped switch/combo rows for every control
-- **`vantage-tray`** — system tray indicator (AyatanaAppIndicator3/GTK3, since GTK4 has no tray API) with quick toggles and an *Open Vantage…* menu item. Works on Wayland compositors including Sway, Hyprland, KDE, and GNOME
 - **`vantage-helper`** — a minimal root helper that performs privileged sysfs writes. Invoked via `pkexec`, gated by polkit (`auth_admin_keep`) — you authenticate once per session, not per change. No long-running daemon
 
-State is read directly from sysfs (no root needed for reads). Both the window and tray share one client (`vantage_client.py`) so they behave identically. Unprivileged operations (microphone, Wi-Fi, power profile) run with no prompt.
+State is read directly from sysfs (no root needed for reads). Unprivileged operations (microphone, Wi-Fi, power profile) run with no prompt.
+
+### Project layout
+
+```
+vantage/
+├── meson.build              # top-level build definition
+├── data/                    # desktop entry, AppStream metainfo, GSettings
+│   ├── org.vantage.Vantage.desktop.in
+│   ├── org.vantage.Vantage.metainfo.xml.in
+│   ├── org.vantage.Vantage.gschema.xml
+│   ├── org.vantage.helper.policy.in
+│   └── icons/               # hicolor app + symbolic icons
+├── src/
+│   ├── vantage.in           # launcher → /usr/bin/vantage
+│   ├── vantage-helper.in    # privileged launcher → /usr/bin/vantage-helper
+│   └── vantage/             # importable Python package
+│       ├── main.py          # entry point + GApplication
+│       ├── window.py        # GTK4 settings window
+│       ├── client.py        # backend facade + GSettings config
+│       ├── hardware.py      # low-level sysfs access
+│       ├── tray.py          # SNI tray + dbusmenu
+│       └── helper.py        # whitelisted privileged writes
+└── po/                      # gettext translation catalogs
+```
+
+The app ID is `org.vantage.Vantage`; the *Run in Background* preference is stored
+in GSettings under that schema.
+
+### Running from source
+
+Because the preference lives in GSettings, an uninstalled run needs the schema
+compiled and on the schema path:
+
+```bash
+glib-compile-schemas data
+GSETTINGS_SCHEMA_DIR=$PWD/data PYTHONPATH=$PWD/src python3 -m vantage.main
+```
+
+**System tray:** enable *Run in Background* in the app settings. When active, closing the window hides it to a tray icon; left-click toggles the window; right-click shows a full quick-toggle menu. The tray is implemented via the `org.kde.StatusNotifierItem` D-Bus protocol and works on KDE, Hyprland + Waybar, Sway, and any compositor with SNI support. Run `vantage --tray` to start directly in the background without showing the window.
 
 ## Requirements
 
 - Python 3 + `python-gobject`
 - GTK4 + libadwaita
-- `libayatana-appindicator` (tray)
 - `polkit` / `pkexec`
 - `networkmanager`
 - `pulseaudio` or `pipewire-pulse`

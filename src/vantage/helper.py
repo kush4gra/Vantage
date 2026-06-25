@@ -12,7 +12,7 @@ Usage:
 """
 import sys
 
-import vantage_common as hw
+from . import hardware as hw
 
 FALSEY = {"0", "false", "off", "no", ""}
 

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Vantage tray icon, symbolic (monochrome). fill="currentColor" lets GTK-
+     based hosts (GNOME, KDE) recolor it to the panel theme. The root color is
+     set to a light grey so hosts that render the SVG directly without symbolic
+     recolouring (Waybar and most Wayland bars, which default currentColor to
+     black) still show a light, visible icon on dark panels. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"
+     color="#dedede">
+  <path d="M5 2 h3 v9 h5 v3 H5 Z" fill="currentColor"/>
+</svg>

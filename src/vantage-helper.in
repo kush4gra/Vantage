@@ -1,0 +1,13 @@
+#!@PYTHON@
+# Generated from src/vantage-helper.in by Meson — do not edit the installed copy.
+#
+# Privileged helper launcher. Run as root via pkexec only (gated by the polkit
+# action org.vantage.helper, whose exec.path must match this file's install
+# location, /usr/bin/vantage-helper). Performs a small set of whitelisted sysfs
+# writes and nothing else.
+import sys
+
+sys.path.insert(1, '@PKGDATADIR@')
+
+from vantage import helper
+sys.exit(helper.main(sys.argv[1:]))

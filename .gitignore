@@ -1,3 +1,12 @@
+# Meson build directories
+/build/
+/builddir/
+_build/
+
+# gettext build artifacts
+/po/*.mo
+/po/.intltool-merge-cache*
+
 # Python
 __pycache__/
 *.py[cod]

@@ -1,0 +1,5 @@
+data/org.vantage.Vantage.desktop.in
+data/org.vantage.Vantage.metainfo.xml.in
+src/vantage/main.py
+src/vantage/window.py
+src/vantage/tray.py

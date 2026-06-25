@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>org.vantage.Vantage</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+
+  <name>Lenovo Vantage</name>
+  <summary>Control Lenovo laptop hardware features</summary>
+
+  <description>
+    <p>
+      Vantage is a native GTK4 / libadwaita control panel for Lenovo laptop
+      hardware on Linux, in the spirit of Lenovo Vantage on Windows. Controls
+      auto-hide when the underlying hardware is not present, so the same app
+      suits any supported model.
+    </p>
+    <p>It can manage:</p>
+    <ul>
+      <li>Battery conservation mode and always-on USB charging</li>
+      <li>Power profiles and fan / thermal modes</li>
+      <li>Fn Lock, the touchpad and the keyboard backlight</li>
+      <li>Microphone and Wi-Fi quick toggles</li>
+    </ul>
+    <p>
+      An optional system-tray mode keeps the quick toggles a click away while
+      the window is closed.
+    </p>
+  </description>
+
+  <launchable type="desktop-id">org.vantage.Vantage.desktop</launchable>
+
+  <categories>
+    <category>System</category>
+    <category>Settings</category>
+  </categories>
+
+  <keywords>
+    <keyword>lenovo</keyword>
+    <keyword>battery</keyword>
+    <keyword>conservation</keyword>
+    <keyword>fan</keyword>
+    <keyword>touchpad</keyword>
+  </keywords>
+
+  <url type="homepage">https://github.com/isshin1/vantage</url>
+  <url type="bugtracker">https://github.com/isshin1/vantage/issues</url>
+
+  <developer id="io.github.isshin1">
+    <name>Vantage contributors</name>
+  </developer>
+
+  <content_rating type="oars-1.1"/>
+
+  <releases>
+    <release version="1.0.0" date="2026-06-25">
+      <description>
+        <p>Meson-based project layout with built-in tray and GSettings.</p>
+      </description>
+    </release>
+  </releases>
+</component>

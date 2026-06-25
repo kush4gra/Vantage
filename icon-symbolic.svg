@@ -1,7 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<!-- Vantage tray icon, symbolic (monochrome). Uses currentColor so Status-
-     NotifierItem hosts (Waybar, GNOME, KDE, …) recolor it to the panel theme,
-     matching the other symbolic tray icons. -->
-<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
-  <path d="M5 2 h3 v9 h5 v3 H5 Z" fill="currentColor"/>
-</svg>

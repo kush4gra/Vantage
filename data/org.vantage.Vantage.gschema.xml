@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.vantage.Vantage" path="/org/vantage/Vantage/">
+    <key name="run-in-background" type="b">
+      <default>false</default>
+      <summary>Run in background</summary>
+      <description>
+        Keep Vantage running in the system tray when the window is closed,
+        instead of quitting. The window can be reopened from the tray icon.
+      </description>
+    </key>
+  </schema>
+</schemalist>

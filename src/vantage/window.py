@@ -3,36 +3,44 @@
 
 A native settings panel for Lenovo hardware controls, in the spirit of Lenovo
 Vantage / PlasmaVantage. Privileged sysfs writes go through the polkit-gated
-`pkexec vantage-helper` (shared with the tray via vantage_client); session-level
+`pkexec vantage-helper` (shared with the tray via client.py); session-level
 controls (microphone, Wi-Fi, power profile) run directly. Controls auto-hide
 when the underlying hardware isn't present, so the same binary suits any
 Lenovo model.
+
+This module defines only the window; the GApplication and CLI entry point live
+in main.py.
 """
+import logging
+from gettext import gettext as _
+
 import gi
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 
-from gi.repository import Adw, Gtk, GLib, Gio  # noqa: E402
+from gi.repository import Adw, Gtk, GLib  # noqa: E402
 
-from vantage_client import (  # noqa: E402
-    Vantage, FAN_MODES, FAN_LABELS, CONSERVATION_LIMIT_PCT)
+from .client import (  # noqa: E402
+    FAN_MODES, FAN_LABELS, CONSERVATION_LIMIT_PCT)
 
-APP_ID = "org.vantage.Vantage"
+log = logging.getLogger("vantage.window")
 
 # power-profiles-daemon profile id -> human label.
 PROFILE_LABELS = {
-    "power-saver": "Power Saver",
-    "low-power": "Low Power",
-    "balanced": "Balanced",
-    "performance": "Performance",
+    "power-saver": _("Power Saver"),
+    "low-power": _("Low Power"),
+    "balanced": _("Balanced"),
+    "performance": _("Performance"),
 }
 
 
 class VantageWindow(Adw.ApplicationWindow):
-    def __init__(self, app, backend):
-        super().__init__(application=app, title="Lenovo Vantage")
+    def __init__(self, app, backend, config):
+        super().__init__(application=app, title=_("Lenovo Vantage"))
         self.backend = backend
+        self._config = config
+        self._sni    = None        # VantageSNI instance when active
         self.set_default_size(420, 640)
 
         self._guard = False        # suppress handlers during programmatic updates
@@ -48,13 +56,17 @@ class VantageWindow(Adw.ApplicationWindow):
 
         header = Adw.HeaderBar()
         refresh = Gtk.Button(icon_name="view-refresh-symbolic")
-        refresh.set_tooltip_text("Refresh")
+        refresh.set_tooltip_text(_("Refresh"))
         refresh.connect("clicked", lambda _b: self.refresh())
         header.pack_start(refresh)
         about = Gtk.Button(icon_name="dialog-information-symbolic")
-        about.set_tooltip_text("About this device")
+        about.set_tooltip_text(_("About this device"))
         about.connect("clicked", self._show_about)
         header.pack_end(about)
+        self._settings_btn = Gtk.Button(icon_name="preferences-system-symbolic")
+        self._settings_btn.set_tooltip_text(_("Settings"))
+        self._settings_btn.connect("clicked", self._show_settings)
+        header.pack_end(self._settings_btn)
         toolbar.add_top_bar(header)
 
         self.page = Adw.PreferencesPage()
@@ -65,26 +77,29 @@ class VantageWindow(Adw.ApplicationWindow):
         # Single polkit prompt at launch; auth_admin_keep covers later writes.
         GLib.idle_add(self._authenticate)
 
+        if self._config.get_run_in_background():
+            GLib.idle_add(self._start_sni)
+
     # ---- auth ----------------------------------------------------------------
     def _authenticate(self):
         if not self.backend.authenticate():
-            self._toast("Not authorized — changes may prompt for a password.")
+            self._toast(_("Not authorized — changes may prompt for a password."))
         return False
 
     # ---- build ---------------------------------------------------------------
     def _build(self):
         st = self.state
 
-        power = self._group("Power & Battery")
+        power = self._group(_("Power & Battery"))
         if "conservation_mode" in st:
-            self._switch(power, "conservation_mode", "Conservation Mode",
-                         "Caps charge at ~%d%% to extend battery lifespan"
+            self._switch(power, "conservation_mode", _("Conservation Mode"),
+                         _("Caps charge at ~%d%% to extend battery lifespan")
                          % CONSERVATION_LIMIT_PCT,
                          lambda s: s.get("conservation_mode") == "1",
                          lambda on: self.backend.set_vpc("conservation_mode", "1" if on else "0"))
         if "usb_charging" in st:
-            self._switch(power, "usb_charging", "Always-On USB",
-                         "Keep USB ports powered while suspended",
+            self._switch(power, "usb_charging", _("Always-On USB"),
+                         _("Keep USB ports powered while suspended"),
                          lambda s: s.get("usb_charging") == "1",
                          lambda on: self.backend.set_vpc("usb_charging", "1" if on else "0"))
         if "power_profile" in st:
@@ -93,44 +108,45 @@ class VantageWindow(Adw.ApplicationWindow):
             self._add_battery_health(power)
         self._maybe_add(power)
 
-        thermal = self._group("Thermal")
+        thermal = self._group(_("Thermal"))
         if "fan_mode" in st:
             self._add_fan_mode(thermal)
         if "fan_rpms" in st:
             self._add_fan_speed(thermal)
         self._maybe_add(thermal)
 
-        inp = self._group("Input")
+        inp = self._group(_("Input"))
         if "fn_lock" in st:
             # fn_lock sysfs: "1" == locked-off; show On == multimedia-without-Fn.
-            self._switch(inp, "fn_lock", "Fn Lock",
-                         "Use multimedia keys without holding Fn",
+            self._switch(inp, "fn_lock", _("Fn Lock"),
+                         _("Use multimedia keys without holding Fn"),
                          lambda s: s.get("fn_lock") == "0",
                          lambda on: self.backend.set_vpc("fn_lock", "0" if on else "1"))
         if "touchpad_inhibited" in st:
-            self._switch(inp, "touchpad_inhibited", "Touchpad",
-                         "Enable the laptop touchpad",
+            self._switch(inp, "touchpad_inhibited", _("Touchpad"),
+                         _("Enable the laptop touchpad"),
                          lambda s: s.get("touchpad_inhibited") != "1",
                          lambda on: self.backend.set_touchpad_enabled(on))
         if "kbd_backlight" in st:
             self._add_kbd_backlight(inp)
         self._maybe_add(inp)
 
-        privacy = self._group("Privacy")
+        privacy = self._group(_("Privacy"))
         if "mic_on" in st:
-            self._switch(privacy, "mic_on", "Microphone",
-                         "Unmute the default input device",
+            self._switch(privacy, "mic_on", _("Microphone"),
+                         _("Unmute the default input device"),
                          lambda s: s.get("mic_on") == "1",
                          lambda on: self.backend.set_mic_on(on))
         self._maybe_add(privacy)
 
-        network = self._group("Network")
+        network = self._group(_("Network"))
         if "wifi_on" in st:
-            self._switch(network, "wifi_on", "Wi-Fi",
-                         "Enable the wireless radio",
+            self._switch(network, "wifi_on", _("Wi-Fi"),
+                         _("Enable the wireless radio"),
                          lambda s: s.get("wifi_on") == "1",
                          lambda on: self.backend.set_wifi_on(on))
         self._maybe_add(network)
+
 
     # ---- widget builders -----------------------------------------------------
     def _group(self, title):
@@ -174,8 +190,8 @@ class VantageWindow(Adw.ApplicationWindow):
         choices = [c for c in self.state["power_profile_choices"].split(",") if c]
         self._profiles = choices
         labels = [PROFILE_LABELS.get(c, c.title()) for c in choices]
-        self._combo(group, "power_profile", "Power Profile",
-                    "System performance vs. battery",
+        self._combo(group, "power_profile", _("Power Profile"),
+                    _("System performance vs. battery"),
                     labels,
                     lambda s: self._profiles.index(s["power_profile"])
                     if s.get("power_profile") in self._profiles else None,
@@ -184,7 +200,7 @@ class VantageWindow(Adw.ApplicationWindow):
     def _add_fan_mode(self, group):
         group._has_rows = True
         labels = [lbl for _v, lbl in FAN_MODES]
-        row = Adw.ComboRow(title="Fan Mode", subtitle="Cooling profile",
+        row = Adw.ComboRow(title=_("Fan Mode"), subtitle=_("Cooling profile"),
                            model=Gtk.StringList.new(labels))
 
         def current_idx(s):
@@ -206,7 +222,7 @@ class VantageWindow(Adw.ApplicationWindow):
                 # immediately revert the combo. Run the command, show a toast, and
                 # restore the previous selection ourselves without a sysfs round-trip.
                 self.backend.set_vpc("fan_mode", "2")
-                self._toast("Dust cleaning started — fans will return to normal shortly")
+                self._toast(_("Dust cleaning started — fans will return to normal shortly"))
                 prev = current_idx(self.state)
                 if prev is not None:
                     self._guard = True
@@ -234,18 +250,18 @@ class VantageWindow(Adw.ApplicationWindow):
         except ValueError:
             mx = 2
         if mx <= 2:
-            labels = ["Off", "Low", "High"][:mx + 1]
+            labels = [_("Off"), _("Low"), _("High")][:mx + 1]
         else:
-            labels = ["Off"] + ["Level %d" % i for i in range(1, mx + 1)]
-        self._combo(group, "kbd_backlight", "Keyboard Backlight",
-                    "Key illumination level",
+            labels = [_("Off")] + [_("Level %d") % i for i in range(1, mx + 1)]
+        self._combo(group, "kbd_backlight", _("Keyboard Backlight"),
+                    _("Key illumination level"),
                     labels,
                     lambda s: max(0, min(mx, int(s.get("kbd_backlight", "0")))),
                     lambda i: self.backend.set_kbd_backlight(i))
 
     def _add_battery_health(self, group):
         group._has_rows = True
-        self._batt_row = Adw.ActionRow(title="Battery Health",
+        self._batt_row = Adw.ActionRow(title=_("Battery Health"),
                                        subtitle=self._batt_text(self.backend.battery_info()))
         self._batt_row.add_css_class("property")
         group.add(self._batt_row)
@@ -253,23 +269,23 @@ class VantageWindow(Adw.ApplicationWindow):
     @staticmethod
     def _batt_text(info):
         if not info:
-            return "Unavailable"
+            return _("Unavailable")
         parts = []
         if "health_pct" in info:
-            parts.append("%.1f%% of design capacity" % info["health_pct"])
+            parts.append(_("%.1f%% of design capacity") % info["health_pct"])
         if "cycle_count" in info:
-            parts.append("%d cycles" % info["cycle_count"])
+            parts.append(_("%d cycles") % info["cycle_count"])
         if info.get("capacity"):
-            charge = "%s%% charged" % info["capacity"]
+            charge = _("%s%% charged") % info["capacity"]
             status = (info.get("status") or "").strip().lower()
             if status and status not in ("unknown", "full"):
                 charge += " (%s)" % status
             parts.append(charge)
-        return " · ".join(parts) or "Unavailable"
+        return " · ".join(parts) or _("Unavailable")
 
     def _add_fan_speed(self, group):
         group._has_rows = True
-        self._fan_row = Adw.ActionRow(title="Fan Speed",
+        self._fan_row = Adw.ActionRow(title=_("Fan Speed"),
                                       subtitle=self._fan_text(self.backend.fan_rpms()))
         self._fan_row.add_css_class("property")
         group.add(self._fan_row)
@@ -279,12 +295,12 @@ class VantageWindow(Adw.ApplicationWindow):
     @staticmethod
     def _fan_text(fans):
         if not fans:
-            return "Unavailable"
-        parts = ["%s %d RPM" % (lbl or "Fan %d" % i, rpm)
+            return _("Unavailable")
+        parts = ["%s %d RPM" % (lbl or _("Fan %d") % i, rpm)
                  for i, (lbl, rpm) in enumerate(fans, 1)]
         text = " · ".join(parts)
         if all(rpm == 0 for _l, rpm in fans):
-            text += "  (idle)"
+            text += "  " + _("(idle)")
         return text
 
     def _poll_fans(self):
@@ -294,33 +310,92 @@ class VantageWindow(Adw.ApplicationWindow):
         row.set_subtitle(self._fan_text(self.backend.fan_rpms()))
         return True  # keep the timer alive
 
+    # ---- tray / background ---------------------------------------------------
+
+    def _show_settings(self, button):
+        popover = Gtk.Popover()
+        popover.set_parent(button)
+        grp = Adw.PreferencesGroup()
+        row = Adw.SwitchRow(
+            title=_("Run in Background"),
+            subtitle=_("Keep Vantage in the system tray when closed"),
+        )
+        row.set_active(self._config.get_run_in_background())
+        row.connect("notify::active", self._on_bg_toggled)
+        grp.add(row)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        box.set_margin_top(8)
+        box.set_margin_bottom(8)
+        box.set_margin_start(8)
+        box.set_margin_end(8)
+        box.append(grp)
+        popover.set_child(box)
+        popover.popup()
+
+    def _on_bg_toggled(self, row, _pspec):
+        if self._guard:
+            return
+        enabled = row.get_active()
+        self._config.set_run_in_background(enabled)
+        if enabled:
+            self._start_sni()
+        else:
+            self._stop_sni()
+            self.present()   # un-hide window if it was hidden
+
+    def _start_sni(self):
+        if self._sni is not None:
+            return False
+        from .tray import VantageSNI
+        self.set_hide_on_close(True)
+        self._sni = VantageSNI(
+            backend   = self.backend,
+            window_fn = lambda: self,
+            quit_fn   = lambda: self.get_application().quit(),
+        )
+        self._sni.start()
+        self._vis_handler = self.connect(
+            "notify::visible",
+            lambda *_: self._sni.notify_window_visibility_changed())
+        return False
+
+    def _stop_sni(self):
+        if self._sni is None:
+            return
+        self.set_hide_on_close(False)
+        if hasattr(self, "_vis_handler"):
+            self.disconnect(self._vis_handler)
+            del self._vis_handler
+        self._sni.stop()
+        self._sni = None
+
     # ---- about ---------------------------------------------------------------
-    def _show_about(self, *_):
+    def _show_about(self, *_args):
         info = self.backend.system_info()
         dialog = Adw.Dialog()
-        dialog.set_title("About This Device")
+        dialog.set_title(_("About This Device"))
         dialog.set_content_width(460)
 
         tv = Adw.ToolbarView()
         tv.add_top_bar(Adw.HeaderBar())
         page = Adw.PreferencesPage()
-        group = Adw.PreferencesGroup(title="System")
+        group = Adw.PreferencesGroup(title=_("System"))
 
         def row(title, value):
-            r = Adw.ActionRow(title=title, subtitle=value or "Unknown")
+            r = Adw.ActionRow(title=title, subtitle=value or _("Unknown"))
             r.set_subtitle_selectable(True)
             group.add(r)
             return r
 
-        row("Device", info["device"])
+        row(_("Device"), info["device"])
         if info.get("machine_type"):
-            row("Machine Type", info["machine_type"])
-        row("Processor", info["cpu"])
-        row("Memory", info["ram"])
-        row("Operating System", info["os"])
-        row("Kernel", info["kernel"])
-        row("Hostname", info["hostname"])
-        serial_row = row("Serial Number", "Loading…")
+            row(_("Machine Type"), info["machine_type"])
+        row(_("Processor"), info["cpu"])
+        row(_("Memory"), info["ram"])
+        row(_("Operating System"), info["os"])
+        row(_("Kernel"), info["kernel"])
+        row(_("Hostname"), info["hostname"])
+        serial_row = row(_("Serial Number"), _("Loading…"))
 
         page.add(group)
         tv.set_content(page)
@@ -330,7 +405,7 @@ class VantageWindow(Adw.ApplicationWindow):
         # Serial is root-only; fetch it after the dialog is up so it never blocks
         # opening (the launch-time auth is cached, so this won't re-prompt).
         def fill_serial():
-            serial_row.set_subtitle(self.backend.serial() or "Unavailable")
+            serial_row.set_subtitle(self.backend.serial() or _("Unavailable"))
             return False
         GLib.idle_add(fill_serial)
 
@@ -353,7 +428,7 @@ class VantageWindow(Adw.ApplicationWindow):
             try:
                 upd(self.state)
             except Exception:
-                pass
+                log.exception("updater failed during refresh")
         if getattr(self, "_fan_row", None) is not None:
             self._fan_row.set_subtitle(self._fan_text(self.backend.fan_rpms()))
         if getattr(self, "_batt_row", None) is not None:
@@ -363,25 +438,3 @@ class VantageWindow(Adw.ApplicationWindow):
 
     def _toast(self, msg):
         self.toasts.add_toast(Adw.Toast(title=msg))
-
-
-class VantageApp(Adw.Application):
-    def __init__(self):
-        super().__init__(application_id=APP_ID,
-                         flags=Gio.ApplicationFlags.DEFAULT_FLAGS)
-        self.backend = Vantage()
-        self.win = None
-
-    def do_activate(self):
-        if self.win is None:
-            self.win = VantageWindow(self, self.backend)
-        self.win.present()
-
-
-def main():
-    app = VantageApp()
-    return app.run(None)
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

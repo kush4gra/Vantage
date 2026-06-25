@@ -5,13 +5,14 @@ privileged writes via `pkexec vantage-helper`, which is gated by polkit
 (auth_admin_keep -> one prompt per session). Session-level controls (microphone,
 Wi-Fi, power profile) run as the user without any prompt.
 
-Both the GTK4 window (vantage_window.py) and the tray (vantage_tray.py) use this,
-so the two front-ends stay behaviourally identical.
+The GTK4 window (window.py) uses this for all hardware access. The embedded SNI
+tray (tray.py) also calls back into this for quick toggles.
 
 State is returned as a flat dict of strings; a key is present only when the
 underlying control exists on this machine, so front-ends just render the keys
 they get back.
 """
+import logging
 import os
 import platform
 import re
@@ -19,10 +20,16 @@ import shutil
 import subprocess
 import sys
 
-import vantage_common as hw
+from gi.repository import Gio
 
-# Installed helper path (matches the polkit action's exec.path annotation).
-HELPER = "/usr/bin/vantage-helper"
+from . import hardware as hw
+
+log = logging.getLogger("vantage.client")
+
+# Privileged helper executable name. Located on PATH at call time so it works
+# regardless of the install prefix; the resolved absolute path must match the
+# polkit action's exec.path annotation (both come from Meson's bindir).
+HELPER = "vantage-helper"
 
 # Fan-mode value <-> label. "133" is the firmware default that maps to silent.
 FAN_MODES = [
@@ -38,6 +45,26 @@ FAN_LABELS = {"133": "Super Silent", "0": "Super Silent", "1": "Standard",
 # isn't exposed via sysfs, so we surface the value. Newer firmware (e.g. Yoga
 # Pro 7i Gen 11) holds the battery at 80%; older ideapads used ~60%.
 CONSERVATION_LIMIT_PCT = 80
+
+class VantageConfig:
+    """Persistent user preferences, stored via GSettings.
+
+    Backed by the org.vantage.Vantage schema (see the .gschema.xml under data/).
+    The schema must be compiled and installed into a GSettings schema dir, or
+    Gio.Settings.new() aborts — handled by `meson install`; for an uninstalled
+    run point GSETTINGS_SCHEMA_DIR at a dir holding a compiled schema.
+    """
+
+    SCHEMA_ID = "org.vantage.Vantage"
+
+    def __init__(self):
+        self._settings = Gio.Settings.new(self.SCHEMA_ID)
+
+    def get_run_in_background(self) -> bool:
+        return self._settings.get_boolean("run-in-background")
+
+    def set_run_in_background(self, value: bool):
+        self._settings.set_boolean("run-in-background", bool(value))
 
 
 def have(cmd):
@@ -58,17 +85,29 @@ class Vantage:
     @staticmethod
     def _helper(*args):
         """Build the `pkexec vantage-helper ...` argv (dev falls back to source)."""
-        if os.path.exists(HELPER):
-            return ["pkexec", HELPER, *args]
-        local = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                             "vantage_helper.py")
-        return ["pkexec", sys.executable, local, *args]
+        installed = shutil.which(HELPER)
+        if installed:
+            return ["pkexec", installed, *args]
+        # Uninstalled run: invoke the helper module from the source tree. The
+        # package's parent dir (…/src) is two levels up from this file
+        # (src/vantage/client.py); putting it on sys.path lets the root process
+        # resolve `from vantage import helper`.
+        pkg_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        bootstrap = (
+            "import sys; sys.path.insert(1, %r); from vantage import helper; "
+            "raise SystemExit(helper.main(sys.argv[1:]))" % pkg_parent
+        )
+        return ["pkexec", sys.executable, "-c", bootstrap, *args]
 
     def _run_helper(self, *args):
+        log.debug("helper: %s", " ".join(args))
         r = run(*self._helper(*args))
         if r is None or r.returncode != 0:
-            if r is not None and (r.stderr or "").strip():
-                self.notify("Failed: %s" % r.stderr.strip())
+            rc = "no-process" if r is None else r.returncode
+            err = "" if r is None else (r.stderr or "").strip()
+            log.error("helper %s failed (rc=%s): %s", " ".join(args), rc, err)
+            if err:
+                self.notify("Failed: %s" % err)
             return False
         return True
 

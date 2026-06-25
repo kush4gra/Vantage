@@ -4,7 +4,7 @@
  "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
 <policyconfig>
   <vendor>Vantage</vendor>
-  <vendor_url>https://github.com/niizam/vantage</vendor_url>
+  <vendor_url>https://github.com/isshin1/vantage</vendor_url>
 
   <action id="org.vantage.helper">
     <description>Manage Lenovo hardware settings</description>
@@ -15,7 +15,7 @@
       <!-- Cache the authorization for the rest of the session (ask once). -->
       <allow_active>auth_admin_keep</allow_active>
     </defaults>
-    <annotate key="org.freedesktop.policykit.exec.path">/usr/bin/vantage-helper</annotate>
+    <annotate key="org.freedesktop.policykit.exec.path">@BINDIR@/vantage-helper</annotate>
     <annotate key="org.freedesktop.policykit.exec.allow_gui">true</annotate>
   </action>
 </policyconfig>

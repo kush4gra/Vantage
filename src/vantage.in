@@ -1,0 +1,28 @@
+#!@PYTHON@
+# Generated from src/vantage.in by Meson — do not edit the installed copy.
+import gettext
+import locale
+import signal
+import sys
+
+pkgdatadir = '@PKGDATADIR@'
+localedir = '@LOCALEDIR@'
+VERSION = '@VERSION@'
+
+# The Python package lives directly under pkgdatadir (…/vantage/vantage).
+sys.path.insert(1, pkgdatadir)
+
+# Make Ctrl-C from a terminal kill the app rather than dump a traceback.
+signal.signal(signal.SIGINT, signal.SIG_DFL)
+
+# Translations: install _() into builtins for every module.
+try:
+    locale.bindtextdomain('vantage', localedir)
+    locale.textdomain('vantage')
+except (locale.Error, AttributeError, OSError):
+    pass
+gettext.install('vantage', localedir)
+
+if __name__ == '__main__':
+    from vantage import main
+    sys.exit(main.main(version=VERSION))

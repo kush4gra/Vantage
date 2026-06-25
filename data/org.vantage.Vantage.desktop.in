@@ -2,8 +2,9 @@
 Type=Application
 Name=Lenovo Vantage
 Comment=Control Lenovo laptop hardware features
-Exec=/usr/bin/vantage
-Icon=vantage
+Exec=vantage
+Icon=org.vantage.Vantage
 Terminal=false
 Categories=System;Settings;HardwareSettings;
 Keywords=lenovo;vantage;battery;conservation;fan;touchpad;
+StartupNotify=true

@@ -1,9 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=Lenovo Vantage (Tray)
-Comment=Tray indicator for Lenovo hardware controls
-Exec=/usr/bin/vantage-tray
-Icon=vantage
-Terminal=false
-Categories=System;Settings;
-X-GNOME-Autostart-enabled=true
