@@ -38,11 +38,12 @@ class VantageApp(Adw.Application):
         if self.win is None:
             self.win = VantageWindow(self, self.backend, self.config)
         if self._tray_only:
-            # --tray: start with the window hidden. _start_sni is already queued
-            # from the window's __init__ when run_in_background is set; otherwise
-            # force it on for this run and start the tray ourselves.
+            # --tray: start with the window hidden. Bring the tray up for this
+            # run only — without flipping the persisted run-in-background pref
+            # (a transient CLI flag shouldn't rewrite stored settings). If the
+            # pref is already on, the window's __init__ has queued _start_sni and
+            # the guard inside it makes a second call a no-op.
             if self.win._sni is None:
-                self.config.set_run_in_background(True)
                 GLib.idle_add(self.win._start_sni)
             # Don't present the window — the user opens it via the tray icon.
         else:

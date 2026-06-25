@@ -212,18 +212,28 @@ class VantageMenu:
             self._reg_id = None
 
     def rebuild(self):
-        """Rebuild menu from current hardware state and notify the tray host."""
+        """Rebuild menu from current hardware state and notify the tray host.
+
+        get_state() spawns pactl/nmcli/powerprofilesctl, so gather it off the
+        main loop and apply the new tree once it returns.
+        """
+        self._backend.get_state_async(self._rebuild_with_state)
+        return False   # safe for GLib.idle_add
+
+    def _rebuild_with_state(self, st):
+        if isinstance(st, BaseException):
+            log.error("tray state refresh failed: %s", st)
+            return
         self._revision += 1
         self._next_id = 1
         self._id_to_action.clear()
         self._flat_items.clear()
-        self._root_children = self._build_items()
+        self._root_children = self._build_items(st)
         self._index_nodes()
         if self._conn and self._reg_id:
             self._conn.emit_signal(
                 None, self.MENU_PATH, self.MENU_IFACE, "LayoutUpdated",
                 GLib.Variant("(ui)", (self._revision, 0)))
-        return False   # safe for GLib.idle_add
 
     # ---- ID allocator --------------------------------------------------------
 
@@ -237,8 +247,7 @@ class VantageMenu:
 
     # ---- menu tree -----------------------------------------------------------
 
-    def _build_items(self):
-        st = self._backend.get_state()
+    def _build_items(self, st):
         items = []
 
         def toggle(label, active, setter):
@@ -249,8 +258,8 @@ class VantageMenu:
                 "enabled":      GLib.Variant("b", True),
             }
             def action(fn=setter):
-                fn()
-                GLib.idle_add(self.rebuild)
+                # Run the write off-thread, then rebuild once it lands.
+                self._backend.call_async(fn, lambda _r: self.rebuild())
             return self._alloc(props, action), props
 
         if "conservation_mode" in st:
@@ -334,8 +343,9 @@ class VantageMenu:
                 "enabled":      GLib.Variant("b", True),
             }
             def action(name=p):
-                self._backend.set_power_profile(name)
-                GLib.idle_add(self.rebuild)
+                self._backend.call_async(
+                    lambda: self._backend.set_power_profile(name),
+                    lambda _r: self.rebuild())
             children.append((self._alloc(props, action), props, []))
         cur_label = PROFILE_LABELS.get(current, current or "?")
         parent_props = {
@@ -357,9 +367,10 @@ class VantageMenu:
                 "enabled":      GLib.Variant("b", True),
             }
             def action(v=val):
-                self._backend.set_vpc("fan_mode", v)
-                if v != "2":  # Dust Cleaning resets sysfs asynchronously — skip rebuild
-                    GLib.idle_add(self.rebuild)
+                # Dust Cleaning ("2") resets sysfs asynchronously — skip the rebuild.
+                done = (lambda _r: None) if v == "2" else (lambda _r: self.rebuild())
+                self._backend.call_async(
+                    lambda: self._backend.set_vpc("fan_mode", v), done)
             children.append((self._alloc(props, action), props, []))
         parent_props = {
             "label":            GLib.Variant("s", _("Fan Mode: %s") % current),
@@ -385,8 +396,9 @@ class VantageMenu:
                 "enabled":      GLib.Variant("b", True),
             }
             def action(lvl=i):
-                self._backend.set_kbd_backlight(lvl)
-                GLib.idle_add(self.rebuild)
+                self._backend.call_async(
+                    lambda: self._backend.set_kbd_backlight(lvl),
+                    lambda _r: self.rebuild())
             children.append((self._alloc(props, action), props, []))
         cur_label = labels[cur] if cur < len(labels) else str(cur)
         parent_props = {
@@ -530,6 +542,7 @@ class VantageSNI:
         self._menu       = VantageMenu(backend, window_fn, quit_fn)
         self._conn       = None
         self._owner_id   = 0
+        self._watch_id   = 0
         self._sni_reg_id = None
         self._bus_name   = "org.kde.StatusNotifierItem-%d-1" % os.getpid()
         self._node_info  = Gio.DBusNodeInfo.new_for_xml(SNI_XML)
@@ -546,6 +559,9 @@ class VantageSNI:
         )
 
     def stop(self):
+        if self._watch_id:
+            Gio.bus_unwatch_name(self._watch_id)
+            self._watch_id = 0
         if self._sni_reg_id and self._conn:
             self._conn.unregister_object(self._sni_reg_id)
             self._sni_reg_id = None
@@ -569,17 +585,29 @@ class VantageSNI:
             self._on_method_call, self._on_get_property, None)
         self._menu.register(conn)
         self._menu.rebuild()
+        # Watch the StatusNotifierWatcher rather than registering just once: this
+        # fires now if a host is already up, AND again whenever the host restarts
+        # (common on Wayland — e.g. Waybar reload), so the icon comes back instead
+        # of vanishing for good. The watch starts only after our objects are
+        # registered above, so the host never queries a half-set-up item.
+        self._watch_id = Gio.bus_watch_name_on_connection(
+            conn, self.WATCHER_BUS, Gio.BusNameWatcherFlags.NONE,
+            self._on_watcher_appeared, None)
 
     def _on_name_acquired(self, conn, name):
+        pass   # registration is driven by the watcher watch in _on_bus_acquired
+
+    def _on_name_lost(self, conn, name):
+        pass   # bus name conflict / no session bus — tray just won't appear
+
+    def _on_watcher_appeared(self, conn, name, owner):
+        """The StatusNotifierWatcher (re)appeared — (re)register our item."""
         conn.call(
             self.WATCHER_BUS, self.WATCHER_PATH, self.WATCHER_IFACE,
             "RegisterStatusNotifierItem",
             GLib.Variant("(s)", (self._bus_name,)),
             None, Gio.DBusCallFlags.NONE, -1, None,
-            lambda c, r: self._on_registered(c, r))
-
-    def _on_name_lost(self, conn, name):
-        pass   # no watcher or bus conflict — tray just won't appear
+            self._on_registered)
 
     def _on_registered(self, conn, result):
         try:

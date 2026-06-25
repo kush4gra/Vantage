@@ -47,6 +47,8 @@ class VantageWindow(Adw.ApplicationWindow):
         self._guard = False        # suppress handlers during programmatic updates
         self._updaters = []        # callables that re-sync a widget from state
         self._profiles = []        # raw power-profile ids, in display order
+        self._fan_timer_id = 0     # live fan poll source id (0 = stopped)
+        self._settings_popover = None   # built once, reused (no per-click leak)
         self.state = backend.get_state()
 
         self.toasts = Adw.ToastOverlay()
@@ -83,9 +85,14 @@ class VantageWindow(Adw.ApplicationWindow):
 
     # ---- auth ----------------------------------------------------------------
     def _authenticate(self):
-        if not self.backend.authenticate():
-            self._toast(_("Not authorized — changes may prompt for a password."))
+        # pkexec may block on a polkit prompt — run it off the main loop so the
+        # window stays responsive while the password dialog is up.
+        self.backend.call_async(self.backend.authenticate, self._on_authenticated)
         return False
+
+    def _on_authenticated(self, ok):
+        if ok is not True:
+            self._toast(_("Not authorized — changes may prompt for a password."))
 
     # ---- build ---------------------------------------------------------------
     def _build(self):
@@ -222,7 +229,7 @@ class VantageWindow(Adw.ApplicationWindow):
                 # in sysfs back to the previous value, so a normal refresh would
                 # immediately revert the combo. Run the command, show a toast, and
                 # restore the previous selection ourselves without a sysfs round-trip.
-                self.backend.set_vpc("fan_mode", "2")
+                self.backend.call_async(lambda: self.backend.set_vpc("fan_mode", "2"))
                 self._toast(_("Dust cleaning started — fans will return to normal shortly"))
                 prev = current_idx(self.state)
                 if prev is not None:
@@ -234,7 +241,7 @@ class VantageWindow(Adw.ApplicationWindow):
                 # write and may pass through unmapped intermediate values (e.g.
                 # "3"). An immediate refresh would read stale/garbage and revert
                 # the combo. Skip it — the UI already shows the right selection.
-                self.backend.set_vpc("fan_mode", val)
+                self.backend.call_async(lambda: self.backend.set_vpc("fan_mode", val))
 
         row.connect("notify::selected", on_selected)
         group.add(row)
@@ -290,8 +297,22 @@ class VantageWindow(Adw.ApplicationWindow):
                                       subtitle=self._fan_text(self.backend.fan_rpms()))
         self._fan_row.add_css_class("property")
         group.add(self._fan_row)
-        # Live tachometer poll (every 2s) independent of the change-driven refresh.
-        GLib.timeout_add_seconds(2, self._poll_fans)
+        # Live tachometer poll (every 2s), but only while the window is on screen —
+        # no point waking the CPU every 2s when hidden in the tray. map/unmap also
+        # ensures the timer is torn down with the window (no leaked source).
+        self.connect("map", lambda *_a: self._start_fan_poll())
+        self.connect("unmap", lambda *_a: self._stop_fan_poll())
+
+    def _start_fan_poll(self):
+        if getattr(self, "_fan_row", None) is None or self._fan_timer_id:
+            return
+        self._poll_fans()   # refresh immediately on show
+        self._fan_timer_id = GLib.timeout_add_seconds(2, self._poll_fans)
+
+    def _stop_fan_poll(self):
+        if self._fan_timer_id:
+            GLib.source_remove(self._fan_timer_id)
+            self._fan_timer_id = 0
 
     @staticmethod
     def _fan_text(fans):
@@ -307,6 +328,7 @@ class VantageWindow(Adw.ApplicationWindow):
     def _poll_fans(self):
         row = getattr(self, "_fan_row", None)
         if row is None:
+            self._fan_timer_id = 0
             return False  # row gone; stop polling
         row.set_subtitle(self._fan_text(self.backend.fan_rpms()))
         return True  # keep the timer alive
@@ -314,30 +336,43 @@ class VantageWindow(Adw.ApplicationWindow):
     # ---- tray / background ---------------------------------------------------
 
     def _show_settings(self, button):
+        # Build the popover once and reuse it. A manually-parented GtkPopover is
+        # not freed until unparented, so creating a new one per click would leak
+        # the whole widget subtree each time.
+        if self._settings_popover is None:
+            self._settings_popover = self._build_settings_popover(button)
+        # Re-sync the toggles to live state before showing (guarded so the
+        # programmatic update doesn't fire the toggle handlers).
+        self._guard = True
+        self._bg_row.set_active(
+            self._config.get_run_in_background() or self._sni is not None)
+        self._auto_row.set_active(autostart.is_enabled())
+        self._guard = False
+        self._settings_popover.popup()
+
+    def _build_settings_popover(self, button):
         popover = Gtk.Popover()
         popover.set_parent(button)
         grp = Adw.PreferencesGroup()
 
-        bg_row = Adw.SwitchRow(
+        self._bg_row = Adw.SwitchRow(
             title=_("Run in Background"),
             subtitle=_("Keep Vantage in the system tray when closed"),
         )
-        bg_row.set_active(self._config.get_run_in_background())
-        bg_row.connect("notify::active", self._on_bg_toggled)
-        grp.add(bg_row)
+        self._bg_row.connect("notify::active", self._on_bg_toggled)
+        grp.add(self._bg_row)
 
-        auto_row = Adw.SwitchRow(title=_("Start on Login"))
+        self._auto_row = Adw.SwitchRow(title=_("Start on Login"))
         if autostart.desktop_supports_autostart():
-            auto_row.set_subtitle(_("Launch Vantage in the tray when you log in"))
+            self._auto_row.set_subtitle(_("Launch Vantage in the tray when you log in"))
         else:
             desktop = autostart.current_desktop() or _("your compositor")
             # Bare WMs (Hyprland, sway, …) don't read ~/.config/autostart.
-            auto_row.set_subtitle(
+            self._auto_row.set_subtitle(
                 _("%s may ignore autostart entries — add "
                   "“exec-once = vantage --tray” to its config") % desktop)
-        auto_row.set_active(autostart.is_enabled())
-        auto_row.connect("notify::active", self._on_autostart_toggled)
-        grp.add(auto_row)
+        self._auto_row.connect("notify::active", self._on_autostart_toggled)
+        grp.add(self._auto_row)
 
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         box.set_margin_top(8)
@@ -346,7 +381,7 @@ class VantageWindow(Adw.ApplicationWindow):
         box.set_margin_end(8)
         box.append(grp)
         popover.set_child(box)
-        popover.popup()
+        return popover
 
     def _on_bg_toggled(self, row, _pspec):
         if self._guard:
@@ -430,12 +465,12 @@ class VantageWindow(Adw.ApplicationWindow):
         dialog.set_child(tv)
         dialog.present(self)
 
-        # Serial is root-only; fetch it after the dialog is up so it never blocks
-        # opening (the launch-time auth is cached, so this won't re-prompt).
-        def fill_serial():
-            serial_row.set_subtitle(self.backend.serial() or _("Unavailable"))
-            return False
-        GLib.idle_add(fill_serial)
+        # Serial is root-only; fetch it off-thread so the pkexec call never
+        # blocks the UI (the launch-time auth is cached, so this won't re-prompt).
+        def got_serial(val):
+            serial_row.set_subtitle((val if isinstance(val, str) else None)
+                                    or _("Unavailable"))
+        self.backend.call_async(self.backend.serial, got_serial)
 
     # ---- state plumbing ------------------------------------------------------
     def _sync(self, row, prop, value):
@@ -446,11 +481,20 @@ class VantageWindow(Adw.ApplicationWindow):
     def _handle(self, action):
         if self._guard:
             return
-        action()
-        GLib.idle_add(self.refresh)
+        # Run the (possibly pkexec-backed) write off the main loop, then refresh.
+        self.backend.call_async(action, lambda _r: self.refresh())
 
     def refresh(self, *_):
-        self.state = self.backend.get_state()
+        # State reads spawn pactl/nmcli/powerprofilesctl — do it off-thread and
+        # apply the result back on the main loop.
+        self.backend.get_state_async(self._apply_state)
+        return False
+
+    def _apply_state(self, state):
+        if isinstance(state, BaseException):
+            log.error("state refresh failed: %s", state)
+            return
+        self.state = state
         self._guard = True
         for upd in self._updaters:
             try:
@@ -462,7 +506,6 @@ class VantageWindow(Adw.ApplicationWindow):
         if getattr(self, "_batt_row", None) is not None:
             self._batt_row.set_subtitle(self._batt_text(self.backend.battery_info()))
         self._guard = False
-        return False
 
     def _toast(self, msg):
         self.toasts.add_toast(Adw.Toast(title=msg))

@@ -19,12 +19,36 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 
-from gi.repository import Gio
+from gi.repository import GLib, Gio
 
 from . import hardware as hw
 
 log = logging.getLogger("vantage.client")
+
+
+def run_in_thread(work, on_done):
+    """Run blocking ``work()`` off the GLib main loop.
+
+    The result (or, on failure, the caught exception) is delivered to
+    ``on_done(result)`` back on the main loop, so callers can touch GTK/D-Bus
+    safely. Used to keep pkexec/pactl/nmcli spawns from freezing the UI.
+    """
+    def target():
+        try:
+            result = work()
+        except BaseException as exc:  # report, never let the worker thread die noisily
+            log.exception("background task failed")
+            result = exc
+        GLib.idle_add(_deliver, on_done, result)
+
+    threading.Thread(target=target, daemon=True).start()
+
+
+def _deliver(on_done, result):
+    on_done(result)
+    return False   # one-shot idle source
 
 # Privileged helper executable name. Located on PATH at call time so it works
 # regardless of the install prefix; the resolved absolute path must match the
@@ -125,6 +149,20 @@ class Vantage:
     def notify(self, msg):
         if have("notify-send"):
             run("notify-send", "Vantage", msg)
+
+    # ---- async wrappers (keep blocking work off the GTK main loop) ------------
+    def get_state_async(self, on_done):
+        """Compute get_state() off-thread; on_done(dict|Exception) on main loop."""
+        run_in_thread(self.get_state, on_done)
+
+    def call_async(self, work, on_done=None):
+        """Run a blocking backend call (write, pkexec, serial …) off-thread.
+
+        on_done(result) fires on the main loop once it completes; pass None to
+        fire-and-forget. ``result`` is the call's return value, or the caught
+        exception on failure.
+        """
+        run_in_thread(work, on_done if on_done is not None else (lambda _r: None))
 
     # ---- combined state (unprivileged reads) ---------------------------------
     def get_state(self):
