@@ -12,6 +12,7 @@ Usage:
 """
 import sys
 
+from . import gpu
 from . import hardware as hw
 
 FALSEY = {"0", "false", "off", "no", ""}
@@ -48,7 +49,8 @@ def _set(key, value):
 
 def main(argv):
     if not argv:
-        sys.stderr.write("usage: vantage-helper auth | set <key> <value>\n")
+        sys.stderr.write(
+            "usage: vantage-helper auth | set <key> <value> | gpu-mode <mode>\n")
         return 2
     if argv[0] == "auth":
         return 0
@@ -63,7 +65,13 @@ def main(argv):
         if ok is None:
             return 2
         return 0 if ok else 1
-    sys.stderr.write("usage: vantage-helper auth | set <key> <value>\n")
+    if argv[0] == "gpu-mode" and len(argv) == 2:
+        if argv[1] not in gpu.MODES:
+            sys.stderr.write("vantage-helper: rejected gpu mode %r\n" % argv[1])
+            return 2
+        return 0 if gpu.set_mode(argv[1]) else 1
+    sys.stderr.write(
+        "usage: vantage-helper auth | set <key> <value> | gpu-mode <mode>\n")
     return 2
 
 

@@ -1,11 +1,11 @@
 # Desktop entry (translatable keys merged from po/).
 desktop_file = i18n.merge_file(
-        input: 'org.vantage.Vantage.desktop.in',
-       output: 'org.vantage.Vantage.desktop',
+        input: 'vantage.desktop.in',
+       output: 'vantage.desktop',
          type: 'desktop',
        po_dir: '..' / 'po',
       install: true,
-  install_dir: get_option('datadir') / 'applications',
+  install_dir: '/usr/share/applications',
 )
 
 desktop_validate = find_program('desktop-file-validate', required: false)

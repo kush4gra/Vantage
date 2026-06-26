@@ -23,6 +23,7 @@ import threading
 
 from gi.repository import GLib, Gio
 
+from . import gpu
 from . import hardware as hw
 
 log = logging.getLogger("vantage.client")
@@ -191,6 +192,9 @@ class Vantage:
         if cur is not None:
             state["power_profile"] = cur
             state["power_profile_choices"] = ",".join(choices)
+        if gpu.available():
+            state["gpu_mode"] = gpu.current_mode()
+            state["gpu_applied"] = gpu.applied_mode()
         return state
 
     # ---- privileged writes (via pkexec helper) -------------------------------
@@ -202,6 +206,14 @@ class Vantage:
 
     def set_kbd_backlight(self, level):
         return self._run_helper("set", "kbd_backlight", str(int(level)))
+
+    def set_gpu_mode(self, mode):
+        """Switch hybrid-graphics mode (integrated/hybrid). Needs a reboot."""
+        return self._run_helper("gpu-mode", mode)
+
+    def reboot(self):
+        """Reboot the machine via logind (prompts through its own polkit agent)."""
+        run("systemctl", "reboot")
 
     # ---- session-level writes (no root) --------------------------------------
     def set_mic_on(self, on):

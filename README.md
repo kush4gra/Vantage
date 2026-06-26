@@ -16,6 +16,19 @@ A native GTK4 app that brings Lenovo Vantage controls to Linux — battery conse
 - Fan Mode — Super Silent, Standard, Dust Cleaning, Efficient Thermal Dissipation
 - Live fan RPM readout for both fans
 
+**Graphics** (NVIDIA Optimus laptops)
+- Graphics Mode — lock the machine to the integrated GPU (*Integrated*, blacklists
+  the NVIDIA modules and powers the dGPU off via udev), or restore *Hybrid* so apps
+  can render on the dGPU on demand. Wayland-only.
+
+  > **Reboot required.** Switching modes rewrites a modprobe blacklist + udev rule
+  > and rebuilds the initramfs, so the change only takes effect after a reboot. To
+  > go back, pick the other mode in the app and reboot again — *Hybrid* removes the
+  > files vantage added and restores the distro default. The initramfs rebuild is
+  > distro-agnostic (works with `update-initramfs`, `mkinitcpio`/`limine-mkinitcpio`,
+  > `dracut`, and `booster`); in *Integrated* mode CUDA/NVENC/PRIME offload are
+  > unavailable until you switch back.
+
 **Input**
 - Fn Lock — use multimedia keys without holding Fn
 - Keyboard Backlight — set illumination level
@@ -28,7 +41,7 @@ A native GTK4 app that brings Lenovo Vantage controls to Linux — battery conse
 **About**
 - Device info panel — model, CPU, RAM, OS, serial number
 
-Controls auto-hide when the underlying hardware isn't present, so the same app works across different Lenovo models. Legion-only controls (Super key lock, fast charge, display overdrive, hybrid graphics) appear automatically when the `LenovoLegionLinux` kernel module is loaded.
+Controls auto-hide when the underlying hardware isn't present, so the same app works across different Lenovo models. The Graphics Mode control appears only when an NVIDIA dGPU is detected. Legion-only controls (Super key lock, fast charge, display overdrive) appear automatically when the `LenovoLegionLinux` kernel module is loaded.
 
 > **Note:** Camera privacy is not controlled in software. On many models (e.g. Yoga Pro 7i Gen 11) the `camera_power` sysfs bit is cosmetic and doesn't actually gate the sensor — use the laptop's physical camera key instead, which is EC-backed.
 

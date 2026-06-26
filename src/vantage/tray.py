@@ -31,12 +31,13 @@ KBD_LABELS = [_("Off"), _("Low"), _("High")]
 # Pre-rendered light tray PNG (installed path first, dev fallback next). A PNG
 # is used rather than the SVG because gdk-pixbuf's SVG loader (librsvg) is an
 # optional dependency that may be absent, whereas PNG support is always present.
+_SELF_DIR = os.path.dirname(os.path.abspath(__file__))
 _ICON_CANDIDATES = [
-    # Installed location (pkgdatadir), then the source tree for uninstalled runs.
-    "/usr/share/vantage/icon-tray.png",
-    os.path.join(
-        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-        "data", "icon-tray.png"),
+    # Installed: icon-tray.png sits one level above the package directory
+    # (pkgdatadir = <prefix>/share/vantage, package = pkgdatadir/vantage).
+    os.path.join(os.path.dirname(_SELF_DIR), "icon-tray.png"),
+    # Source tree fallback for uninstalled dev runs.
+    os.path.join(os.path.dirname(os.path.dirname(_SELF_DIR)), "data", "icon-tray.png"),
 ]
 
 

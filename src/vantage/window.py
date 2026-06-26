@@ -137,6 +137,11 @@ class VantageWindow(Adw.ApplicationWindow):
             self._add_fan_speed(thermal)
         self._maybe_add(thermal)
 
+        graphics = self._group(_("Graphics"))
+        if "gpu_mode" in st:
+            self._add_gpu_mode(graphics)
+        self._maybe_add(graphics)
+
         inp = self._group(_("Input"))
         if "fn_lock" in st:
             # fn_lock sysfs: "1" == locked-off; show On == multimedia-without-Fn.
@@ -280,6 +285,127 @@ class VantageWindow(Adw.ApplicationWindow):
                     labels,
                     lambda s: max(0, min(mx, int(s.get("kbd_backlight", "0")))),
                     lambda i: self.backend.set_kbd_backlight(i))
+
+    # GPU mode labels, in selection order. Index maps to self._gpu_modes.
+    GPU_MODES = [
+        ("integrated", _("Integrated (iGPU only)")),
+        ("hybrid", _("Hybrid (NVIDIA on demand)")),
+    ]
+
+    def _add_gpu_mode(self, group):
+        group._has_rows = True
+        self._gpu_modes = [m for m, _l in self.GPU_MODES]
+        labels = [l for _m, l in self.GPU_MODES]
+        row = Adw.ComboRow(
+            title=_("Graphics Mode"),
+            subtitle=_("Lock to the integrated GPU, or allow NVIDIA on demand."),
+            model=Gtk.StringList.new(labels))
+
+        def current_idx(s):
+            v = s.get("gpu_mode")
+            return self._gpu_modes.index(v) if v in self._gpu_modes else None
+
+        idx = current_idx(self.state)
+        if idx is not None:
+            row.set_selected(idx)
+
+        self._gpu_combo = row
+
+        def on_selected(r, _p):
+            if self._guard:
+                return
+            mode = self._gpu_modes[r.get_selected()]
+            if mode == self.state.get("gpu_mode"):
+                return
+            # Switching writes /etc files and rebuilds the initramfs, which can
+            # take up to a minute — show a live busy row and lock the combo so the
+            # user sees it's working. On completion the refresh re-reads the
+            # on-disk mode (keeping the combo in sync, or reverting it if the
+            # privileged switch was denied) and reveals the reboot row.
+            self._set_gpu_busy(True)
+            self.backend.call_async(
+                lambda: self.backend.set_gpu_mode(mode),
+                lambda ok: self._on_gpu_switch_done(ok))
+
+        row.connect("notify::selected", on_selected)
+        group.add(row)
+
+        # Busy row: visible only while a switch (initramfs rebuild) is running.
+        self._gpu_spinner = Gtk.Spinner()
+        self._gpu_busy_row = Adw.ActionRow(
+            title=_("Applying graphics mode…"),
+            subtitle=_("Rebuilding the initramfs — this can take up to a minute"))
+        self._gpu_busy_row.add_prefix(self._gpu_spinner)
+        self._gpu_busy_row.set_visible(False)
+        group.add(self._gpu_busy_row)
+
+        # Pending-reboot row: shown only while the configured mode differs from
+        # the one actually booted (gpu_mode != gpu_applied). Switching back to
+        # the running mode makes them match again and hides it — repeatable.
+        reboot_row = Adw.ActionRow(
+            title=_("Reboot required"),
+            subtitle=_("Restart to apply the new graphics mode"))
+        reboot_row.add_prefix(Gtk.Image.new_from_icon_name(
+            "system-reboot-symbolic"))
+        reboot_btn = Gtk.Button(label=_("Reboot Now"), valign=Gtk.Align.CENTER)
+        reboot_btn.add_css_class("destructive-action")
+        reboot_btn.connect("clicked", self._confirm_reboot)
+        reboot_row.add_suffix(reboot_btn)
+        self._gpu_reboot_row = reboot_row
+        reboot_row.set_visible(self._gpu_reboot_pending(self.state))
+        group.add(reboot_row)
+
+        def upd(s):
+            i = current_idx(s)
+            if i is not None:
+                self._sync(row, "selected", i)
+            # While a switch is in flight, the busy row owns the visuals; don't
+            # let a background refresh flash the reboot row underneath it.
+            if not self._gpu_busy_row.get_visible():
+                reboot_row.set_visible(self._gpu_reboot_pending(s))
+        self._updaters.append(upd)
+
+    def _set_gpu_busy(self, busy):
+        """Toggle the in-progress state of the graphics-mode switch."""
+        self._gpu_busy_row.set_visible(busy)
+        self._gpu_combo.set_sensitive(not busy)
+        if busy:
+            self._gpu_reboot_row.set_visible(False)
+            self._gpu_spinner.start()
+        else:
+            self._gpu_spinner.stop()
+
+    def _on_gpu_switch_done(self, ok):
+        self._set_gpu_busy(False)
+        if ok is not True:
+            # The helper already surfaced the real error via notify(); add a toast
+            # so it's visible in-window too.
+            self._toast(_("Could not switch graphics mode"))
+        self.refresh()
+
+    @staticmethod
+    def _gpu_reboot_pending(s):
+        """True when a graphics-mode switch is configured but not yet booted."""
+        applied = s.get("gpu_applied")
+        return applied is not None and s.get("gpu_mode") != applied
+
+    def _confirm_reboot(self, *_args):
+        dialog = Adw.AlertDialog(
+            heading=_("Reboot now?"),
+            body=_("The graphics mode change takes effect after restarting. "
+                   "Save your work — all open applications will close."))
+        dialog.add_response("cancel", _("Cancel"))
+        dialog.add_response("reboot", _("Reboot"))
+        dialog.set_response_appearance("reboot",
+                                       Adw.ResponseAppearance.DESTRUCTIVE)
+        dialog.set_default_response("cancel")
+        dialog.set_close_response("cancel")
+        dialog.connect("response", self._on_reboot_response)
+        dialog.present(self)
+
+    def _on_reboot_response(self, _dialog, response):
+        if response == "reboot":
+            self.backend.call_async(self.backend.reboot)
 
     def _add_battery_health(self, group):
         group._has_rows = True
