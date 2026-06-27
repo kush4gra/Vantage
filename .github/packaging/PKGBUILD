@@ -13,10 +13,12 @@ makedepends=('meson' 'ninja' 'gettext' 'appstream')
 source=()
 
 build() {
-    arch-meson "$srcdir/src-tree" build
-    meson compile -C build
+    # The release workflow copies the repo into ./src-tree next to this
+    # PKGBUILD; $startdir is that directory.
+    arch-meson "$startdir/src-tree" "$srcdir/build"
+    meson compile -C "$srcdir/build"
 }
 
 package() {
-    meson install -C build --destdir "$pkgdir"
+    meson install -C "$srcdir/build" --destdir "$pkgdir"
 }
